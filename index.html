@@ -342,6 +342,7 @@ function LogOut({ data, save, currentLocationId }) {
   const [reason, setReason] = useState("");
   const [note, setNote] = useState("");
   const [initials, setInitials] = useState("");
+  const [transferDate, setTransferDate] = useState(new Date().toISOString().slice(0, 10));
   const [done, setDone] = useState(false);
 
   if (!currentLocationId) {
@@ -361,7 +362,7 @@ function LogOut({ data, save, currentLocationId }) {
       fromLocationId: currentLocationId,
       toLocationId: destId,
       status: "in_transit",
-      removedAt: Date.now(),
+      removedAt: new Date(transferDate + "T12:00:00").getTime(),
       arrivedAt: null,
       note: note.trim(),
     };
@@ -372,6 +373,7 @@ function LogOut({ data, save, currentLocationId }) {
     setReason("");
     setNote("");
     setInitials("");
+    setTransferDate(new Date().toISOString().slice(0, 10));
     setDone(true);
     setTimeout(() => setDone(false), 2500);
   }
@@ -484,6 +486,20 @@ function LogOut({ data, save, currentLocationId }) {
         />
       </Field>
 
+      <Field label="Transfer date">
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="date"
+            value={transferDate}
+            onChange={e => setTransferDate(e.target.value)}
+            style={{ width: 160 }}
+          />
+          {transferDate !== new Date().toISOString().slice(0, 10) && (
+            <span style={{ fontSize: 12, color: "var(--color-text-warning)", fontWeight: 500 }}>Backdated</span>
+          )}
+        </div>
+      </Field>
+
       {itemId && destId && (
         <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 14px", fontSize: 13, color: "var(--color-text-secondary)" }}>
           <i className="ti ti-arrow-right" aria-hidden="true"></i>{" "}
@@ -509,6 +525,7 @@ function LogIn({ data, save, currentLocationId }) {
   const [transferId, setTransferId] = useState("");
   const [done, setDone] = useState(false);
   const [initials, setInitials] = useState("");
+  const [arrivalDate, setArrivalDate] = useState(new Date().toISOString().slice(0, 10));
 
   if (!currentLocationId) {
     return <Notice icon="ti-map-pin" text="Select your current location at the top to log items in." />;
@@ -521,11 +538,12 @@ function LogIn({ data, save, currentLocationId }) {
   function confirm() {
     if (!transferId) return;
     const updated = data.transfers.map(t =>
-      t.id === transferId ? { ...t, status: "completed", arrivedAt: Date.now(), checkedInBy: initials.trim().toUpperCase() } : t
+      t.id === transferId ? { ...t, status: "completed", arrivedAt: new Date(arrivalDate + "T12:00:00").getTime(), checkedInBy: initials.trim().toUpperCase() } : t
     );
     save({ ...data, transfers: updated });
     setTransferId("");
     setInitials("");
+    setArrivalDate(new Date().toISOString().slice(0, 10));
     setDone(true);
     setTimeout(() => setDone(false), 2500);
   }
@@ -581,6 +599,20 @@ function LogIn({ data, save, currentLocationId }) {
               style={{ width: 80, textTransform: "uppercase" }}
               maxLength={4}
             />
+          </Field>
+
+          <Field label="Arrival date">
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="date"
+                value={arrivalDate}
+                onChange={e => setArrivalDate(e.target.value)}
+                style={{ width: 160 }}
+              />
+              {arrivalDate !== new Date().toISOString().slice(0, 10) && (
+                <span style={{ fontSize: 12, color: "var(--color-text-warning)", fontWeight: 500 }}>Backdated</span>
+              )}
+            </div>
           </Field>
 
           <button
@@ -890,33 +922,50 @@ function DailyCount({ data, save }) {
   }
 
   // ── Auto-fill helpers ──
-  function getSinceDate() {
-    if (!rows.length) return 0;
-    const lastDate = rows[rows.length - 1].date;
-    return new Date(lastDate + "T00:00:00").getTime();
+  function tsMatchesDate(ts, dateStr) {
+    // Check if a timestamp falls on a given YYYY-MM-DD date (local time)
+    if (!ts) return false;
+    const d = new Date(ts);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}` === dateStr;
   }
 
-  function autoFillReceived() {
-    // New Tempest Device inventory entries added via PO since last count
-    const since = getSinceDate();
-    const total = (data.inventory || [])
-      .filter(e => TEMPEST_IDS.includes(e.itemId) && e.receivedFrom === "From PO" && e.addedAt > since)
+  function autoFillForDate(dateStr) {
+    // Qty Received: new PO inventory entries on this date
+    const received = (data.inventory || [])
+      .filter(e => TEMPEST_IDS.includes(e.itemId) && e.receivedFrom === "From PO" && tsMatchesDate(e.addedAt, dateStr))
       .reduce((sum, e) => sum + e.qty, 0);
-    return total;
+
+    // Qty Tested: Tempest Devices FROM Testing Room TO Shipping confirmed on this date
+    const tested = (data.transfers || [])
+      .filter(t =>
+        t.status === "completed" &&
+        TEMPEST_IDS.includes(t.itemId) &&
+        t.fromLocationId === TESTING_LOC &&
+        t.toLocationId === SHIPPING_LOC &&
+        tsMatchesDate(t.arrivedAt || t.removedAt, dateStr)
+      )
+      .reduce((sum, t) => sum + (t.qty || 1), 0);
+
+    return { received, tested };
   }
 
-  function autoFillTested() {
-    // Completed transfers: Tempest Devices FROM Testing Room TO Shipping since last count
-    const since = getSinceDate();
-    const transfers = (data.transfers || []).filter(t =>
-      t.status === "completed" &&
-      TEMPEST_IDS.includes(t.itemId) &&
-      t.fromLocationId === TESTING_LOC &&
-      t.toLocationId === SHIPPING_LOC &&
-      (t.arrivedAt || t.removedAt) > since
-    );
-    return transfers.reduce((sum, t) => sum + (t.qty || 1), 0);
-  }
+  // Re-run auto-fill when date changes in a new entry (not when editing)
+  useEffect(() => {
+    if (!showModal || editingId) return;
+    const { received, tested } = autoFillForDate(form.date);
+    const fills = {};
+    setForm(f => ({
+      ...f,
+      qtyReceived: received > 0 ? String(received) : "",
+      qtyTested:   tested   > 0 ? String(tested)   : "",
+    }));
+    if (received > 0) fills.received = received;
+    if (tested   > 0) fills.tested   = tested;
+    setAutoFills(fills);
+  }, [form.date, showModal]);
 
   function openModal(rowToEdit = null) {
     if (rowToEdit) {
@@ -924,15 +973,9 @@ function DailyCount({ data, save }) {
       setEditingId(rowToEdit.id);
       setAutoFills({});
     } else {
-      const received = autoFillReceived();
-      const tested   = autoFillTested();
-      const newForm  = { ...emptyForm, date: today };
-      const fills    = {};
-      if (received > 0) { newForm.qtyReceived = String(received); fills.received = received; }
-      if (tested   > 0) { newForm.qtyTested   = String(tested);   fills.tested   = tested;   }
-      setForm(newForm);
-      setAutoFills(fills);
+      setForm({ ...emptyForm, date: today });
       setEditingId(null);
+      // auto-fill triggered by useEffect above when showModal becomes true
     }
     setShowModal(true);
   }
