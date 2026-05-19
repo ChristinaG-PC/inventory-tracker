@@ -366,7 +366,15 @@ function LogOut({ data, save, currentLocationId }) {
       arrivedAt: null,
       note: note.trim(),
     };
-    save({ ...data, transfers: [transfer, ...data.transfers] });
+
+    // Deduct from source location inventory
+    let updatedInventory = data.inventory.map(e =>
+      e.locationId === currentLocationId && e.itemId === itemId
+        ? { ...e, qty: Math.max(0, e.qty - Number(qty)) }
+        : e
+    );
+
+    save({ ...data, transfers: [transfer, ...data.transfers], inventory: updatedInventory });
     setItemId("");
     setDestId("");
     setQty(1);
@@ -537,10 +545,33 @@ function LogIn({ data, save, currentLocationId }) {
 
   function confirm() {
     if (!transferId) return;
-    const updated = data.transfers.map(t =>
+    const transfer = data.transfers.find(t => t.id === transferId);
+    const transferQty = transfer?.qty || 1;
+    const itemId = transfer?.itemId;
+
+    // Add to destination inventory
+    const existingEntry = data.inventory.find(e => e.locationId === currentLocationId && e.itemId === itemId);
+    let updatedInventory;
+    if (existingEntry) {
+      updatedInventory = data.inventory.map(e =>
+        e.id === existingEntry.id ? { ...e, qty: e.qty + transferQty } : e
+      );
+    } else {
+      updatedInventory = [...data.inventory, {
+        id: genId(),
+        locationId: currentLocationId,
+        itemId,
+        qty: transferQty,
+        receivedFrom: "Transfer",
+        note: "",
+        addedAt: Date.now(),
+      }];
+    }
+
+    const updatedTransfers = data.transfers.map(t =>
       t.id === transferId ? { ...t, status: "completed", arrivedAt: new Date(arrivalDate + "T12:00:00").getTime(), checkedInBy: initials.trim().toUpperCase() } : t
     );
-    save({ ...data, transfers: updated });
+    save({ ...data, transfers: updatedTransfers, inventory: updatedInventory });
     setTransferId("");
     setInitials("");
     setArrivalDate(new Date().toISOString().slice(0, 10));
@@ -888,7 +919,8 @@ function DailyCount({ data, save }) {
     returnsRTS: "",
     manualAdjBalance: "",
     qtyShippedShopify: "",
-    qtyShippedBK: "",
+    qtyShippedB2B: "",
+    qtyShippedFeeder: "",
     qtyShippedAmazon: "",
     openingRTSBalance: "",
   };
@@ -917,7 +949,7 @@ function DailyCount({ data, save }) {
     const newRTS            = n(r.qtyTested) - n(r.qtyFailedQCHold) + n(r.qcHoldFixed) - n(r.manualAdjNewRTS);
     const rtsBalancePrevDay = prev ? prev.currentRTSBalance : n(r.openingRTSBalance);
     const currentRTSBalance = rtsBalancePrevDay + newRTS + n(r.returnsRTS) + n(r.manualAdjBalance)
-      - n(r.qtyShippedShopify) - n(r.qtyShippedBK) - n(r.qtyShippedAmazon);
+      - n(r.qtyShippedShopify) - n(r.qtyShippedB2B) - n(r.qtyShippedFeeder) - n(r.qtyShippedAmazon);
     calc.push({ ...r, newRTS, rtsBalancePrevDay, currentRTSBalance });
   }
 
@@ -1128,7 +1160,8 @@ function DailyCount({ data, save }) {
                   {numField("Returns", "returnsRTS")}
                   {numField("Balance Adj", "manualAdjBalance")}
                   {numField("Shopify", "qtyShippedShopify")}
-                  {numField("BK", "qtyShippedBK")}
+                  {numField("B2B Store", "qtyShippedB2B")}
+                  {numField("Feeder Store", "qtyShippedFeeder")}
                   {numField("Amazon", "qtyShippedAmazon")}
                   {isFirstRow && numField("Opening RTS Balance", "openingRTSBalance")}
                 </div>
@@ -1170,7 +1203,7 @@ function DailyCount({ data, save }) {
                   <th style={thBase} rowSpan={2}>Date</th>
                   <th colSpan={6} style={{ ...thSec, borderRight: "1px solid #b0c0e8" }}>Testing Queue</th>
                   <th colSpan={4} style={{ ...thSec, borderRight: "1px solid #b0c0e8" }}>RTS Production</th>
-                  <th colSpan={5} style={{ ...thSec, borderRight: "1px solid #b0c0e8" }}>RTS Shipments</th>
+                  <th colSpan={6} style={{ ...thSec, borderRight: "1px solid #b0c0e8" }}>RTS Shipments</th>
                   <th style={thStrong} rowSpan={2}>RTS<br/>Balance</th>
                 </tr>
                 <tr>
@@ -1187,7 +1220,8 @@ function DailyCount({ data, save }) {
                   <th style={thBase}>Returns</th>
                   <th style={thBase}>Bal Adj</th>
                   <th style={thBase}>Shopify</th>
-                  <th style={thBase}>BK</th>
+                  <th style={thBase}>B2B</th>
+                  <th style={thBase}>Feeder</th>
                   <th style={{ ...thBase, borderRight: "1px solid #b0c0e8" }}>Amazon</th>
                 </tr>
               </thead>
@@ -1213,7 +1247,8 @@ function DailyCount({ data, save }) {
                     <td style={tdBase}>{n(row.returnsRTS) || "—"}</td>
                     <td style={tdBase}>{n(row.manualAdjBalance) || "—"}</td>
                     <td style={tdBase}>{n(row.qtyShippedShopify) || "—"}</td>
-                    <td style={tdBase}>{n(row.qtyShippedBK) || "—"}</td>
+                    <td style={tdBase}>{n(row.qtyShippedB2B) || "—"}</td>
+                    <td style={tdBase}>{n(row.qtyShippedFeeder) || "—"}</td>
                     <td style={{ ...tdBase, borderRight: "1px solid #b0c0e8" }}>{n(row.qtyShippedAmazon) || "—"}</td>
                     <td style={tdStrong}>{calcVal(row.currentRTSBalance)}</td>
                   </tr>
